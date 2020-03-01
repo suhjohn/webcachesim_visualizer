@@ -165,6 +165,7 @@ class TraceStatistics:
         for trace in self.trace_iterator:
             timestamp, key, size = trace
             if timestamp - real_time_start_ts > self.real_time_window:
+                print("[real_time_window] end of window")
                 self.real_time_window_mean_size.append(
                     numpy.average(numpy.trim_zeros(real_time_window_size_arr))
                 )
@@ -306,9 +307,10 @@ GB = MB * 1024
 if __name__ == "__main__":
     start = datetime.datetime.now()
     trace_filepath = sys.argv[1]
-    ts_format = "microseconds"
+    real_time_window = int(sys.argv[2])
+    ts_format = sys.argv[3]
     trace_iterator = StringCacheTraceIterator(trace_filepath, ts_format)
-    statistics = TraceStatistics(trace_iterator)
+    statistics = TraceStatistics(trace_iterator, real_time_window=real_time_window)
     print(statistics.as_dict())
     with open(trace_filepath + ".stat", "w") as f:
         json.dump(statistics.as_dict(), f)
