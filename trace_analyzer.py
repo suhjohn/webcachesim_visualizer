@@ -137,10 +137,10 @@ class TraceStatistics:
             setattr(self, key, value)
 
     def _print_status(self):
-        i = self.trace_index % self.logical_window
-        if not i and self.trace_index > 0:
-            print(f"current_count:{self.trace_index} time_taken:{datetime.datetime.now() - self._start_ts}")
-            self._start_ts = datetime.datetime.now()
+        # i = self.trace_index % self.logical_window
+        # if not i and self.trace_index > 0:
+        #     print(f"current_count:{self.trace_index} time_taken:{datetime.datetime.now() - self._start_ts}")
+        #     self._start_ts = datetime.datetime.now()
         self.trace_index += 1
 
     def _collect_unique_obj_statistics(self, q):
