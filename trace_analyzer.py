@@ -36,7 +36,12 @@ class StringCacheTraceIterator:
         file = open(self.file_path, 'r')
         next_line = file.readline()
         while next_line:
-            trace = self.parse_line(next_line)
+            trace = None
+            try:
+                trace = self.parse_line(next_line)
+            except:
+                next_line = file.readline()
+                trace = self.parse_line(next_line)
             # trace: (timestamp, key, size)
             yield trace
             next_line = file.readline()
@@ -53,11 +58,17 @@ class StringCacheTraceIterator:
 
     def parse_line(self, tr_data_line):
         split_line = tr_data_line.split(" ")
+        if len(split_line) < 3:
+            print(tr_data_line)
+            raise ValueError
         try:
             timestamp = int(split_line[0])
         except:
             timestamp = split_line[0]
-        size = int(split_line[2])
+        try:
+            size = int(split_line[2])
+        except:
+            raise
         try:
             key = int(split_line[1])
         except:
