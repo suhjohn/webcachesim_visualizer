@@ -77,7 +77,7 @@ class StringCacheTraceIterator:
 
 
 def init_empty_array(size):
-    arr = [0] * size
+    arr = numpy.empty(size, dtype=int)
     return arr
 
 
