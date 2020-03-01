@@ -174,6 +174,7 @@ class TraceStatistics:
             real_time_window_size_arr[i] = size
             i += 1
             self._print_status()
+            self.trace_index += 1
 
         self.real_time_window_mean_size.append(numpy.average(real_time_window_size_arr))
         q.put({
@@ -191,6 +192,7 @@ class TraceStatistics:
                 logical_window_size_arr = init_empty_array(self.logical_window)
             logical_window_size_arr[i] = size
             self._print_status()
+            self.trace_index += 1
 
         logical_window_size_arr = numpy.trim_zeros(logical_window_size_arr)
         self.logical_window_mean_size.append(numpy.average(logical_window_size_arr))
