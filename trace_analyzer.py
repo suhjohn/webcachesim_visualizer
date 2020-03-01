@@ -77,9 +77,7 @@ class StringCacheTraceIterator:
 
 
 def init_empty_array(size):
-    arr = numpy.empty(size, dtype=numpy.int)
-    for i in range(len(arr)):
-        arr[i] = 0
+    arr = [0] * size
     return arr
 
 
@@ -110,6 +108,7 @@ class TraceStatistics:
         self.real_time_window = real_time_window * CONVERSION_MULTIPLE[self.trace_iterator.ts_format]
         self.real_time_window_mean_size = []
 
+        self._init_ts = datetime.datetime.now()
         self._start_ts = datetime.datetime.now()
         # run statistics
         # self._collect_statistics()
@@ -137,11 +136,12 @@ class TraceStatistics:
             setattr(self, key, value)
 
     def _print_status(self):
-        # i = self.trace_index % self.logical_window
-        # if not i and self.trace_index > 0:
-        #     print(f"current_count:{self.trace_index} time_taken:{datetime.datetime.now() - self._start_ts}")
-        #     self._start_ts = datetime.datetime.now()
-        self.trace_index += 1
+        i = self.trace_index % self.logical_window
+        if not i and self.trace_index > 0:
+            print(
+                f"[{self.trace_index},{datetime.datetime.now() - self._init_ts}] "
+                f"time_taken:{datetime.datetime.now() - self._start_ts}")
+            self._start_ts = datetime.datetime.now()
 
     def _collect_unique_obj_statistics(self, q):
         unique_obj = {}
@@ -160,14 +160,19 @@ class TraceStatistics:
 
     def _collect_real_time_window_statistics(self, q):
         real_time_start_ts, _, _ = self.trace_iterator.head()[0]
-        real_time_window_size_arr = []
+        real_time_window_size_arr = init_empty_array(1000 * 100 * 100)
+        i = 0
         for trace in self.trace_iterator:
             timestamp, key, size = trace
             if timestamp - real_time_start_ts > self.real_time_window:
-                self.real_time_window_mean_size.append(numpy.average(real_time_window_size_arr))
+                self.real_time_window_mean_size.append(
+                    numpy.average(numpy.trim_zeros(real_time_window_size_arr))
+                )
                 real_time_start_ts = timestamp
-                real_time_window_size_arr = []
-            real_time_window_size_arr.append(size)
+                i = 0
+                real_time_window_size_arr = init_empty_array(1000 * 100 * 100)
+            real_time_window_size_arr[i] = size
+            i += 1
             self._print_status()
 
         self.real_time_window_mean_size.append(numpy.average(real_time_window_size_arr))
@@ -197,7 +202,7 @@ class TraceStatistics:
         for trace in self.trace_iterator:
             timestamp, key, size = trace
             self.freq_counter[key] += 1
-            self._print_status()
+            self.trace_index += 1
 
         for _, counter in self.freq_counter.items():
             freq_index = min(counter, self.MAX_FREQ_COUNT + 1)
@@ -210,7 +215,7 @@ class TraceStatistics:
         for trace in self.trace_iterator:
             timestamp, key, size = trace
             self._put_to_size_bin(size)
-            self._print_status()
+            self.trace_index += 1
 
         q.put({
             "size_bins": list(self.size_bins),
@@ -220,7 +225,7 @@ class TraceStatistics:
         for trace in self.trace_iterator:
             timestamp, key, size = trace
             self._put_to_age_bin(key)
-            self._print_status()
+            self.trace_index += 1
 
         q.put({
             "trace_index": self.trace_index,

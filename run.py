@@ -27,7 +27,6 @@ def run():
             EQUALS("max_n_element", "80000000")
         ])
 
-
         print(simulation_analyzer.to_bmr_list(filtered_df, "cache_size"))
         # print(simulation_analyzer.to_omr_list(filtered_df, "cache_size"))
         # print(simulation_analyzer.cache_sizes_omr(TRACE_CACHE_SIZES[trace], filtered_df))
