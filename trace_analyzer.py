@@ -157,11 +157,14 @@ class TraceStatistics:
     def _collect_logical_window_statistics(self, q):
         real_time_start_ts, _, _ = self.trace_iterator.head()[0]
         logical_window_size_arr = init_empty_array(self.logical_window)
+        start_ts = datetime.datetime.now()
         for trace in self.trace_iterator:
             timestamp, key, size = trace
             i = self.trace_index % self.logical_window
             if not i and self.trace_index > 0:
                 self.logical_window_mean_size.append(numpy.average(logical_window_size_arr))
+                print(f"current_count:{self.trace_index} time_taken:{datetime.datetime.now() - start_ts}")
+                start_ts = datetime.datetime.now()
                 logical_window_size_arr = init_empty_array(self.logical_window)
             logical_window_size_arr[i] = size
             self.trace_index += 1
