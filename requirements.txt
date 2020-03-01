@@ -1,0 +1,4 @@
+cffi==1.13.2
+greenlet==0.4.13
+numpy==1.18.1
+readline==6.2.4.1
