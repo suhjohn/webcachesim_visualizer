@@ -160,7 +160,7 @@ class TraceStatistics:
 
     def _collect_real_time_window_statistics(self, q):
         real_time_start_ts, _, _ = self.trace_iterator.head()[0]
-        real_time_window_size_arr = init_empty_array(1000 * 1000 * 100)
+        real_time_window_size_arr = init_empty_array(1000 * 1000 * 50)
         i = 0
         for trace in self.trace_iterator:
             timestamp, key, size = trace
@@ -171,7 +171,7 @@ class TraceStatistics:
                 )
                 i = 0
                 real_time_start_ts = timestamp
-                real_time_window_size_arr = init_empty_array(1000 * 1000 * 100)
+                real_time_window_size_arr = init_empty_array(1000 * 1000 * 50)
             real_time_window_size_arr[i] = size
             i += 1
             self._print_status()
