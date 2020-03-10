@@ -137,11 +137,11 @@ class TraceStatistics:
         for key, value in res_dict.items():
             setattr(self, key, value)
 
-    def _print_status(self):
+    def _print_status(self, process_type=""):
         i = self.trace_index % self.logical_window
         if not i and self.trace_index > 0:
             print(
-                f"[{self.trace_index},{datetime.datetime.now() - self._init_ts}] "
+                f"[{process_type},{self.trace_index},{datetime.datetime.now() - self._init_ts}] "
                 f"time_taken:{datetime.datetime.now() - self._start_ts}")
             self._start_ts = datetime.datetime.now()
 
@@ -152,7 +152,7 @@ class TraceStatistics:
             timestamp, key, size = trace
             unique_obj[key] = size
             total_size += size
-            self._print_status()
+            self._print_status("unique_obj")
 
         q.put({
             "total_obj_size": total_size,
@@ -176,7 +176,7 @@ class TraceStatistics:
                 real_time_window_size_arr = init_empty_array(1000 * 1000 * 50)
             real_time_window_size_arr[i] = size
             i += 1
-            self._print_status()
+            self._print_status("real_time_window")
             self.trace_index += 1
 
         self.real_time_window_mean_size.append(numpy.average(real_time_window_size_arr))
@@ -194,7 +194,7 @@ class TraceStatistics:
                 self.logical_window_mean_size.append(numpy.average(logical_window_size_arr))
                 logical_window_size_arr = init_empty_array(self.logical_window)
             logical_window_size_arr[i] = size
-            self._print_status()
+            self._print_status("logical_window")
             self.trace_index += 1
 
         logical_window_size_arr = numpy.trim_zeros(logical_window_size_arr)
@@ -208,6 +208,7 @@ class TraceStatistics:
             timestamp, key, size = trace
             self.freq_counter[key] += 1
             self.trace_index += 1
+            self._print_status("frequency")
 
         for _, counter in self.freq_counter.items():
             freq_index = min(counter, self.MAX_FREQ_COUNT + 1)
@@ -221,6 +222,7 @@ class TraceStatistics:
             timestamp, key, size = trace
             self._put_to_size_bin(size)
             self.trace_index += 1
+            self._print_status("size")
 
         q.put({
             "size_bins": list(self.size_bins),
@@ -231,6 +233,7 @@ class TraceStatistics:
             timestamp, key, size = trace
             self._put_to_age_bin(key)
             self.trace_index += 1
+            self._print_status("age")
 
         q.put({
             "trace_index": self.trace_index,
