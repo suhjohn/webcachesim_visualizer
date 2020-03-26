@@ -2,6 +2,7 @@ import datetime
 import json
 import math
 import numpy
+import logging
 from collections import defaultdict
 from multiprocessing import Process, Queue
 
@@ -13,7 +14,8 @@ p.start()
 p.join()
 
 """
-
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s.%(msecs)03d %(levelname)s:\t%(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S')
 CONVERSION_MULTIPLE = {
     "seconds": 1,
     "milliseconds": 1000,
@@ -83,231 +85,322 @@ def init_empty_array(size):
     return arr
 
 
-class TraceStatistics:
-    MAX_FREQ_COUNT = 10000
+class SizeBins:
+    def __init__(self, max_pow):
+        self.max_pow = max_pow
+        self.max_bin_size = max_pow + 1
+        self.bins = init_empty_array(1 + 1 + max_pow)
 
-    def __init__(self, trace_iterator, max_pow=32, real_time_window=600, logical_window=100000):
-        """
-        0    1    2    3     ... max_pow - 1                             max_pow
-             2^1  2^2  2^3  2^4   ... 2^(max_pow-1)~2^(max_pow)   2^(max_pow)+
-             12   24   48   816   ...
-        :param filename:
-        :param max_pow: represents the size of bins
-        """
+    def incr_count(self, size):
+        bucket_index = min(size.bit_length(), self.max_bin_size)
+        self.bins[bucket_index] += 1
+
+    def get_bins(self):
+        return list(self.bins)
+
+    def reset_bins(self):
+        self.bins = init_empty_array(1 + self.max_bin_size)
+
+
+class AgeBins:
+    def __init__(self, max_pow):
+        self.bins = init_empty_array(1 + 1 + max_pow)
+        self.last_accessed = defaultdict(int)  # key: last access logical time
+        self.max_bin_size = max_pow + 1
+
+    def incr_count(self, key, curr_index):
+        if self.last_accessed[key]:
+            age_index = min((curr_index - self.last_accessed[key]).bit_length(), self.max_bin_size)
+            self.bins[age_index] += 1
+        self.last_accessed[key] = curr_index
+
+    def get_bins(self):
+        return list(self.bins)
+
+    def reset_bins(self):
+        self.bins = init_empty_array(1 + self.max_bin_size)
+
+
+class FreqBins:
+    def __init__(self, max_pow):
+        self.freq_counter = defaultdict(int)
+        self.bins = init_empty_array(1 + 1 + max_pow)
+        self.max_bin_size = max_pow + 1
+
+    def incr_count(self, key):
+        self.freq_counter[key] += 1
+        freq_index = min(self.freq_counter[key].bit_length(), self.max_bin_size)
+        self.bins[freq_index] += 1
+
+    def get_bins(self):
+        return list(self.bins)
+
+    def reset_bins(self):
+        self.bins = init_empty_array(1 + self.max_bin_size)
+
+
+class TraceStatistics:
+    MAX_FREQ_BUCKET_COUNT = 14
+
+    def __init__(self, trace_iterator, max_pow=32,
+                 real_time_window=600, logical_window=100000):
+
         self.trace_index = 0
         self.trace_iterator = trace_iterator
         self.mean = -1
-        self.size_bins = init_empty_array(1 + 1 + max_pow)
-        self.max_bin_size = max_pow + 1
-        # 1 index, up to 10 million age, 10 million+
-        self.age_bins = init_empty_array(1 + 1 + max_pow)
-        self.frequency_bins = init_empty_array(1 + 1 + self.MAX_FREQ_COUNT)
-        self.last_accessed = defaultdict(int)  # key: last access logical time
-        self.freq_counter = defaultdict(int)
-
+        self.max_pow = max_pow
         self.logical_window = logical_window
-        self.logical_window_mean_size = []
         self.real_time_window = real_time_window * CONVERSION_MULTIPLE[self.trace_iterator.ts_format]
-        self.real_time_window_mean_size = []
 
-        self._init_ts = datetime.datetime.now()
-        self._start_ts = datetime.datetime.now()
-        # run statistics
-        # self._collect_statistics()
-        self.unique_obj_count = 0
-        self.unique_obj_size = 0
-        self.total_obj_size = 0
-        q = Queue()
-        p = Process(target=self._collect_frequency, args=(q,))
-        p2 = Process(target=self._collect_size, args=(q,))
-        p3 = Process(target=self._collect_age, args=(q,))
-        p4 = Process(target=self._collect_real_time_window_statistics, args=(q,))
-        p5 = Process(target=self._collect_logical_window_statistics, args=(q,))
-        p6 = Process(target=self._collect_unique_obj_statistics, args=(q,))
-        processes = [p, p2, p3, p4, p5, p6]
-
-        for _p in processes:
-            _p.start()
-        res_dict = {}
-        for i in range(len(processes)):
-            res_dict.update(q.get())
-        for _p in processes:
-            _p.join()
-
+        self.total_obj_size = None
+        self.total_obj_count = None
+        self.non_one_hit_wonder_count = None
+        self.unique_obj_count = None
+        self.unique_obj_size = None
+        self.frequency_bins = None
+        self.size_bins = None
+        self.age_bins = None
+        self.logical_window_frequency_bins = None
+        self.logical_window_size_bins = None
+        self.logical_window_age_bins = None
+        self.real_time_window_frequency_bins = None
+        self.real_time_window_size_bins = None
+        self.real_time_window_age_bins = None
+        res_dict = self._gather_statistics()
         for key, value in res_dict.items():
             setattr(self, key, value)
 
-    def _print_status(self, process_type=""):
-        i = self.trace_index % self.logical_window
-        if not i and self.trace_index > 0:
-            print(
-                f"[{process_type},{self.trace_index},{datetime.datetime.now() - self._init_ts}] "
-                f"time_taken:{datetime.datetime.now() - self._start_ts}")
-            self._start_ts = datetime.datetime.now()
+    def _gather_statistics(self):
+        logging.info("start gathering statistics")
+        fns = [
+            self._count_general_statistics,
+            self._count_frequency,
+            self._count_size,
+            self._count_age,
+            self._count_logical_window_frequency,
+            self._count_logical_window_size,
+            self._count_logical_window_age,
+            self._count_real_time_window_frequency,
+            self._count_real_time_window_size,
+            self._count_real_time_window_age,
+        ]
+        q = Queue()
+        processes = [Process(target=fn, args=(q,)) for fn in fns]
+        for process in processes:
+            process.start()
+        res_dict = {}
+        for i in range(len(processes)):
+            res_dict.update(q.get())
+        for process in processes:
+            process.join()
 
-    def _collect_unique_obj_statistics(self, q):
+        # post-condition validation
+        assert "total_obj_size" in res_dict
+        assert "total_obj_count" in res_dict
+        assert "non_one_hit_wonder_count" in res_dict
+        assert "unique_obj_count" in res_dict
+        assert "unique_obj_size" in res_dict
+        assert "frequency_bins" in res_dict
+        assert "size_bins" in res_dict
+        assert "age_bins" in res_dict
+        assert "logical_window_frequency_bins" in res_dict
+        assert "logical_window_size_bins" in res_dict
+        assert "logical_window_age_bins" in res_dict
+        assert "real_time_window_frequency_bins" in res_dict
+        assert "real_time_window_size_bins" in res_dict
+        assert "real_time_window_age_bins" in res_dict
+        return res_dict
+
+    def _count_general_statistics(self, q):
         unique_obj = {}
+        trace_count = 0
         total_size = 0
+        obj_count = defaultdict(int)
         for trace in self.trace_iterator:
             timestamp, key, size = trace
             unique_obj[key] = size
+            obj_count[key] += 1
             total_size += size
-            self._print_status("unique_obj")
+            trace_count += 1
 
+        non_one_hit_wonder_count = 0
+        for count in obj_count.values():
+            non_one_hit_wonder_count += int(count > 1)
+        logging.info("count_general_statistics complete")
         q.put({
             "total_obj_size": total_size,
+            "total_obj_count": trace_count,
+            "non_one_hit_wonder_count": non_one_hit_wonder_count,
             "unique_obj_count": len(unique_obj),
             "unique_obj_size": sum(unique_obj.values())
         })
 
-    def _collect_real_time_window_statistics(self, q):
-        real_time_start_ts, _, _ = self.trace_iterator.head()[0]
-        real_time_window_size_arr = init_empty_array(1000 * 1000 * 50)
-        i = 0
+    def _count_frequency(self, q):
+        freq_bins = FreqBins(self.MAX_FREQ_BUCKET_COUNT)
         for trace in self.trace_iterator:
             timestamp, key, size = trace
-            if timestamp - real_time_start_ts > self.real_time_window:
-                print("[real_time_window] end of window")
-                self.real_time_window_mean_size.append(
-                    numpy.average(numpy.trim_zeros(real_time_window_size_arr))
-                )
-                i = 0
-                real_time_start_ts = timestamp
-                real_time_window_size_arr = init_empty_array(1000 * 1000 * 50)
-            real_time_window_size_arr[i] = size
-            i += 1
-            self._print_status("real_time_window")
-            self.trace_index += 1
-
-        self.real_time_window_mean_size.append(numpy.average(real_time_window_size_arr))
+            freq_bins.incr_count(key)
+        logging.info("count_frequency complete")
         q.put({
-            "real_time_window_mean_size": self.real_time_window_mean_size,
+            "frequency_bins": freq_bins.get_bins()
         })
 
-    def _collect_logical_window_statistics(self, q):
-        real_time_start_ts, _, _ = self.trace_iterator.head()[0]
-        logical_window_size_arr = init_empty_array(self.logical_window)
+    def _count_logical_window_frequency(self, q):
+        freq_bins = FreqBins(self.MAX_FREQ_BUCKET_COUNT)
+        logical_window_frequency_bins = []  # list[list[int]]
+        curr_index = 0
         for trace in self.trace_iterator:
             timestamp, key, size = trace
-            i = self.trace_index % self.logical_window
-            if not i and self.trace_index > 0:
-                self.logical_window_mean_size.append(numpy.average(logical_window_size_arr))
-                logical_window_size_arr = init_empty_array(self.logical_window)
-            logical_window_size_arr[i] = size
-            self._print_status("logical_window")
-            self.trace_index += 1
+            freq_bins.incr_count(key)
+            if curr_index % self.logical_window == 0 and curr_index != 0:
+                logical_window_frequency_bins.append(freq_bins.get_bins())
+                freq_bins.reset_bins()
+            curr_index += 1
+        logical_window_frequency_bins.append(freq_bins.get_bins())
 
-        logical_window_size_arr = numpy.trim_zeros(logical_window_size_arr)
-        self.logical_window_mean_size.append(numpy.average(logical_window_size_arr))
+        logging.info("count_logical_window_frequency complete")
         q.put({
-            "logical_window_mean_size": self.logical_window_mean_size,
+            "logical_window_frequency_bins": logical_window_frequency_bins,
         })
 
-    def _collect_frequency(self, q):
+    def _count_real_time_window_frequency(self, q):
+        freq_bins = FreqBins(self.MAX_FREQ_BUCKET_COUNT)
+        window_start_ts, _, _ = self.trace_iterator.head()[0]
+        real_time_window_freq_bins = []  # list[list[int]]
         for trace in self.trace_iterator:
             timestamp, key, size = trace
-            self.freq_counter[key] += 1
-            self.trace_index += 1
-            self._print_status("frequency")
+            freq_bins.incr_count(key)
+            if timestamp - window_start_ts > self.real_time_window:
+                real_time_window_freq_bins.append(freq_bins.get_bins())
+                freq_bins.reset_bins()
+                window_start_ts = timestamp
+        real_time_window_freq_bins.append(freq_bins.get_bins())
 
-        for _, counter in self.freq_counter.items():
-            freq_index = min(counter, self.MAX_FREQ_COUNT + 1)
-            self.frequency_bins[freq_index] += 1
+        logging.info("count_real_time_window_frequency complete")
         q.put({
-            "frequency_bins": self.frequency_bins
+            "real_time_window_frequency_bins": real_time_window_freq_bins,
         })
 
-    def _collect_size(self, q):
+    def _count_size(self, q):
+        size_bins = SizeBins(self.max_pow)
         for trace in self.trace_iterator:
             timestamp, key, size = trace
-            self._put_to_size_bin(size)
-            self.trace_index += 1
-            self._print_status("size")
+            size_bins.incr_count(size)
 
+        logging.info("count_size complete")
         q.put({
-            "size_bins": list(self.size_bins),
+            "size_bins": size_bins.get_bins(),
         })
 
-    def _collect_age(self, q):
+    def _count_logical_window_size(self, q):
+        size_bins = SizeBins(self.max_pow)
+        logical_window_size_bins = []  # list[list[int]]
+        curr_index = 0
         for trace in self.trace_iterator:
             timestamp, key, size = trace
-            self._put_to_age_bin(key)
-            self.trace_index += 1
-            self._print_status("age")
+            size_bins.incr_count(size)
+            if curr_index % self.logical_window == 0 and curr_index != 0:
+                logical_window_size_bins.append(size_bins.get_bins())
+                size_bins.reset_bins()
+            curr_index += 1
+        logical_window_size_bins.append(size_bins.get_bins())
 
+        logging.info("count_logical_window_size complete")
         q.put({
-            "trace_index": self.trace_index,
-            "age_bins": list(self.age_bins),
+            "logical_window_size_bins": logical_window_size_bins,
         })
 
-    # def _collect_statistics(self):
-    #     real_time_start_ts, _, _ = self.trace_iterator.head()[0]
-    #     start_ts = datetime.datetime.now()
-    #
-    #     logical_window_size_arr = init_empty_array(self.logical_window)
-    #     real_time_window_size_arr = []
-    #     for trace in self.trace_iterator:
-    #         timestamp, key, size = trace
-    #         self._put_to_size_bin(size)
-    #         self._put_to_age_bin(key)
-    #         self.freq_counter[key] += 1
-    #
-    #         i = self.trace_index % self.logical_window
-    #         if not i and self.trace_index > 0:
-    #             self.logical_window_mean_size.append(numpy.average(logical_window_size_arr))
-    #             # print(f"current_count:{self.trace_index} time_taken:{datetime.datetime.now() - start_ts}")
-    #             start_ts = datetime.datetime.now()
-    #             logical_window_size_arr = init_empty_array(self.logical_window)
-    #
-    #         if timestamp - real_time_start_ts > self.real_time_window:
-    #             self.real_time_window_mean_size.append(numpy.average(real_time_window_size_arr))
-    #             real_time_start_ts = timestamp
-    #             real_time_window_size_arr = []
-    #
-    #         logical_window_size_arr[i] = size
-    #         real_time_window_size_arr.append(size)
-    #         self.trace_index += 1
-    #
-    #     # clean up calculation of last window
-    #     logical_window_size_arr = numpy.trim_zeros(logical_window_size_arr)
-    #     self.logical_window_mean_size.append(numpy.average(logical_window_size_arr))
-    #     self.real_time_window_mean_size.append(numpy.average(real_time_window_size_arr))
-    #     for _, counter in self.freq_counter.items():
-    #         freq_index = min(counter, self.MAX_FREQ_COUNT + 1)
-    #         self.frequency_bins[freq_index] += 1
+    def _count_real_time_window_size(self, q):
+        window_start_ts, _, _ = self.trace_iterator.head()[0]
+        size_bins = SizeBins(self.max_pow)
+        real_time_window_size_bins = []  # list[list[int]]
+        for trace in self.trace_iterator:
+            timestamp, key, size = trace
+            size_bins.incr_count(size)
+            if timestamp - window_start_ts > self.real_time_window:
+                real_time_window_size_bins.append(size_bins.get_bins())
+                size_bins.reset_bins()
+                window_start_ts = timestamp
+        real_time_window_size_bins.append(size_bins.get_bins())
+
+        logging.info("count_real_time_window_size complete")
+        q.put({
+            "real_time_window_size_bins": real_time_window_size_bins,
+        })
+
+    def _count_age(self, q):
+        age_bins = AgeBins(self.max_pow)
+        curr_index = 0
+        for trace in self.trace_iterator:
+            timestamp, key, size = trace
+            age_bins.incr_count(key, curr_index)
+            curr_index += 1
+
+        logging.info("count_age complete")
+        q.put({
+            "age_bins": age_bins.get_bins(),
+        })
+
+    def _count_logical_window_age(self, q):
+        age_bins = AgeBins(self.max_pow)
+        logical_window_age_bins = []  # list[list[int]]
+        curr_index = 0
+        for trace in self.trace_iterator:
+            timestamp, key, size = trace
+            age_bins.incr_count(key, curr_index)
+            if curr_index % self.logical_window == 0 and curr_index != 0:
+                logical_window_age_bins.append(age_bins.get_bins())
+                age_bins.reset_bins()
+            curr_index += 1
+        logical_window_age_bins.append(age_bins.get_bins())
+
+        logging.info("count_logical_window_age complete")
+        q.put({
+            "logical_window_age_bins": logical_window_age_bins,
+        })
+
+    def _count_real_time_window_age(self, q):
+        age_bins = AgeBins(self.max_pow)
+        window_start_ts, _, _ = self.trace_iterator.head()[0]
+        real_time_window_age_bins = []  # list[list[int]]
+        curr_index = 0
+        for trace in self.trace_iterator:
+            timestamp, key, size = trace
+            age_bins.incr_count(key, curr_index)
+            if timestamp - window_start_ts > self.real_time_window:
+                real_time_window_age_bins.append(age_bins.get_bins())
+                age_bins.reset_bins()
+                window_start_ts = timestamp
+            curr_index += 1
+        real_time_window_age_bins.append(age_bins.get_bins())
+
+        logging.info("count_real_time_window_age complete")
+        q.put({
+            "real_time_window_age_bins": real_time_window_age_bins,
+        })
 
     def as_dict(self):
         return {
-            "total_count": self.trace_index,
-            "total_size": self.total_obj_size,
-            "size_bins": [int(val) for val in self.size_bins],
-            "age_bins": [int(val) for val in self.age_bins],
-            "frequency_bins": [int(val) for val in self.frequency_bins],
-            "logical_window": self.logical_window,
-            "logical_window_mean_size": list(self.logical_window_mean_size),
-            "real_time_window": self.real_time_window,
-            "real_time_window_mean_size": list(self.real_time_window_mean_size),
-            "real_time_ts_format": self.trace_iterator.ts_format,
+            "total_obj_size": self.total_obj_size,
+            "total_obj_count": self.total_obj_count,
+            "non_one_hit_wonder_count": self.non_one_hit_wonder_count,
+            "unique_obj_count": self.unique_obj_count,
             "unique_obj_size": self.unique_obj_size,
-            "unique_obj_count": self.unique_obj_count
+            "frequency_bins": self.frequency_bins,
+            "size_bins": self.size_bins,
+            "age_bins": self.age_bins,
+            "logical_window_frequency_bins": self.logical_window_frequency_bins,
+            "logical_window_size_bins": self.logical_window_size_bins,
+            "logical_window_age_bins": self.logical_window_age_bins,
+            "real_time_window_frequency_bins": self.real_time_window_frequency_bins,
+            "real_time_window_size_bins": self.real_time_window_size_bins,
+            "real_time_window_age_bins": self.real_time_window_age_bins,
+            # Metadata
+            "logical_window": self.logical_window,
+            "real_time_window": self.real_time_window,
+            "real_time_ts_format": self.trace_iterator.ts_format,
         }
 
-    def _put_to_size_bin(self, size):
-        bucket_index = min(size.bit_length(), self.max_bin_size)
-        self.size_bins[bucket_index] += 1
-
-    def _put_to_age_bin(self, key):
-        if not self.last_accessed[key]:
-            self.last_accessed[key] = self.trace_index
-            return
-        age_index = min((self.trace_index - self.last_accessed[key]).bit_length(), self.max_bin_size)
-        self.age_bins[age_index] += 1
-
-
-B = 1
-KB = B * 1024
-MB = KB * 1024
-GB = MB * 1024
 
 if __name__ == "__main__":
     start = datetime.datetime.now()
