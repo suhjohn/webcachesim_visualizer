@@ -8,14 +8,6 @@ from multiprocessing import Process, Queue
 
 import sys
 
-"""
-p = Process(target=f, args=('bob',))
-p.start()
-p.join()
-
-"""
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s.%(msecs)03d %(levelname)s:\t%(message)s',
-                    datefmt='%Y-%m-%d %H:%M:%S')
 CONVERSION_MULTIPLE = {
     "seconds": 1,
     "milliseconds": 1000,
@@ -403,6 +395,8 @@ class TraceStatistics:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(filename='trace_analyzer.log', level=logging.DEBUG,
+                        format='%(asctime)s.%(msecs)03d %(levelname)s:\t%(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     start = datetime.datetime.now()
     trace_filepath = sys.argv[1]
     real_time_window = int(sys.argv[2])
