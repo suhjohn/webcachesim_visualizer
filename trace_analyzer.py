@@ -130,11 +130,10 @@ class FreqBins:
 
 
 class TraceStatistics:
-    MAX_FREQ_BUCKET_COUNT = 14
+    MAX_FREQ_BUCKET_COUNT = 20
 
     def __init__(self, trace_iterator, max_pow=32,
                  real_time_window=600, logical_window=100000):
-
         self.trace_index = 0
         self.trace_iterator = trace_iterator
         self.mean = -1
@@ -264,6 +263,7 @@ class TraceStatistics:
                 real_time_window_freq_bins.append(freq_bins.get_bins())
                 freq_bins.reset_bins()
                 window_start_ts = timestamp
+
         real_time_window_freq_bins.append(freq_bins.get_bins())
 
         logging.info("count_real_time_window_frequency complete")
