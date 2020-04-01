@@ -129,8 +129,24 @@ class FreqBins:
         self.bins = init_empty_array(1 + self.max_bin_size)
 
 
+class UniqueFrequencyBins:
+    def __init__(self, max_pow):
+        self.freq_counter = defaultdict(int)
+        self.bins = init_empty_array(1 + 1 + max_pow)
+        self.max_bin_size = max_pow + 1
+
+    def incr_count(self, key):
+        self.freq_counter[key] += 1
+
+    def get_bins(self):
+        for key in self.freq_counter.keys():
+            freq_index = min(self.freq_counter[key].bit_length(), self.max_bin_size)
+            self.bins[freq_index] += 1
+        return list(self.bins)
+
+
 class TraceStatistics:
-    MAX_FREQ_BUCKET_COUNT = 20
+    MAX_FREQ_BUCKET_COUNT = 32
 
     def __init__(self, trace_iterator, max_pow=32,
                  real_time_window=600, logical_window=100000):
@@ -225,7 +241,7 @@ class TraceStatistics:
         })
 
     def _count_frequency(self, q):
-        freq_bins = FreqBins(self.MAX_FREQ_BUCKET_COUNT)
+        freq_bins = UniqueFrequencyBins(self.MAX_FREQ_BUCKET_COUNT)
         for trace in self.trace_iterator:
             timestamp, key, size = trace
             freq_bins.incr_count(key)
