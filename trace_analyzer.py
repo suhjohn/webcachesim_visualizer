@@ -409,7 +409,7 @@ class TraceStatistics:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(filename='trace_analyzer.log', level=logging.DEBUG,
+    logging.basicConfig(filename='trace_analyzer.log', filemode='w', level=logging.DEBUG,
                         format='%(asctime)s.%(msecs)03d %(levelname)s:\t%(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     start = datetime.datetime.now()
     trace_filepath = sys.argv[1]
